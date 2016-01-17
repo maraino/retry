@@ -1,5 +1,7 @@
 # retry
-A Go package for automatic retrying
+A Go package for automatic retrying.
+
+Based on https://github.com/nurkiewicz/async-retry
 
 Read online reference at http://godoc.org/github.com/maraino/retry
 
