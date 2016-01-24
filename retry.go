@@ -29,12 +29,13 @@ func (c Context) previous() Context {
 
 // Executor is the type used to run a method with retries.
 type Executor struct {
-	retries     int
-	backoff     Backoff
-	withErr     error
-	withErrComp func(error) bool
-	withPanic   bool
-	Context     Context
+	Context      Context
+	ErrorChannel chan error
+	retries      int
+	backoff      Backoff
+	withErr      error
+	withErrComp  func(error) bool
+	withPanic    bool
 }
 
 // NewExecutor retries a new executor with the number of retries set to 1 and
@@ -67,6 +68,15 @@ func (r *Executor) WithError(err error) *Executor {
 // WithError enables the retries on a specific error.
 func (r *Executor) WithErrorComparator(f func(error) bool) *Executor {
 	r.withErrComp = f
+	return r
+}
+
+// WithErrorChannel initializes Executor.ErrorChannel a buffered channel used
+// to report the errors. The size of the buffer is number of retries + 1, but
+// if number of retries has not been set yet and the channel it not read it can
+// cause a deadlock.
+func (r *Executor) WithErrorChannel() *Executor {
+	r.ErrorChannel = make(chan error, r.retries+1)
 	return r
 }
 
@@ -144,6 +154,12 @@ func (r *Executor) Execute(f func() error) error {
 
 	}
 
+	if r.ErrorChannel != nil {
+		defer func() {
+			close(r.ErrorChannel)
+		}()
+	}
+
 	for i := 0; i <= r.retries; i++ {
 		// Run method
 		if err = f(); err == nil && rec == nil {
@@ -157,6 +173,9 @@ func (r *Executor) Execute(f func() error) error {
 			}
 			if r.withErrComp != nil && r.withErrComp(err) == false {
 				return err
+			}
+			if r.ErrorChannel != nil {
+				r.ErrorChannel <- err
 			}
 		}
 

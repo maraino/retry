@@ -56,6 +56,13 @@ And the backoff strategies can be modified with:
 	executor.WithRandomJitter(rangeDelay time.Duration)
 	executor.WithUniformJitter(rangeDelay time.Duration)
 
+It's also possible to use the ErrorChannel field in the retry.Executor struct
+to retrieve all the errors. This is a buffered channel with the number of
+retries + 1. If this number is not set and the channel is not read a deadlock
+can occur. To enable the ErrorChannel use:
+
+	executor.WithErrorChannel()
+
 All methods in retry.Executor can be chained together, the following code will
 create an executor that will retry the code twice, only with the error
 ErrInternalServerError, it will wait at least 500ms and at most 1500ms:

@@ -2,6 +2,7 @@ package retry
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -113,6 +114,40 @@ func TestWithErrorComparator(t *testing.T) {
 			t.Error("invalid Context.LastDelay")
 		}
 	}
+}
+
+func TestWithErrorChan(t *testing.T) {
+	var wg sync.WaitGroup
+	var testCases = []struct {
+		times  int
+		expErr error
+	}{
+		{1, nil},
+		{5, nil},
+		{6, ErrMaxRetries},
+	}
+	for _, c := range testCases {
+		e := NewExecutor().WithRetries(5).WithDelay(100 * time.Millisecond).WithErrorChannel()
+
+		// Read errors
+		wg.Add(1)
+		go func(times int) {
+			var i int
+			for range e.ErrorChannel {
+				i++
+			}
+			if i != times {
+				t.Error("invalid number of errors")
+			}
+			wg.Done()
+		}(c.times)
+
+		// Execute
+		if err := e.Execute(failTimes(c.times)); err != c.expErr {
+			t.Error("error found and not expected")
+		}
+	}
+	wg.Wait()
 }
 
 func TestWithPanic(t *testing.T) {
