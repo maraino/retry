@@ -4,6 +4,8 @@ import (
 	"errors"
 	"math/rand"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 // ErrMaxRetries is the error returned when the Executor has reached the
@@ -15,21 +17,36 @@ var rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 // Context is the context passed to the backoff strategies.
 type Context struct {
+	context.Context
 	RetryCount int
 	LastDelay  time.Duration
 }
 
-func (c Context) previous() Context {
+// NewContext returns an empty context with the non-nil context.Context created
+// using context.Background()
+func NewContext() *Context {
+	return &Context{
+		Context: context.Background(),
+	}
+}
+
+func (c *Context) previous() Context {
 	var count int
 	if c.RetryCount != 0 {
 		count = c.RetryCount - 1
 	}
-	return Context{RetryCount: count}
+	return Context{
+		Context:    c.Context,
+		RetryCount: count,
+		LastDelay:  c.LastDelay,
+	}
 }
+
+// Operation is the interface to the function executed.
+type Operation func() error
 
 // Executor is the type used to run a method with retries.
 type Executor struct {
-	Context      Context
 	ErrorChannel chan error
 	retries      int
 	backoff      Backoff
@@ -135,12 +152,40 @@ func (r *Executor) WithRandomJitter(rangeDelay time.Duration) *Executor {
 	return r.WithBackoff(randomJitterBackoff(rangeDelay, r.backoff))
 }
 
+func (r *Executor) Execute(f Operation) error {
+	ctx := NewContext()
+	return r.execute(ctx, f)
+}
+
+func (r *Executor) ExecuteContext(ctx context.Context, f Operation) error {
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- r.execute(ctx, f)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errChan:
+		return err
+	}
+}
+
 // Execute runs the function with the retry strategy set. It will only retry
 // if it has pending retries and the function returns an error. It returns the
 // error ErrMaxRetries if it reaches the maximum number of retries.
-func (r *Executor) Execute(f func() error) error {
+func (r *Executor) execute(ctx context.Context, f Operation) error {
 	var err error
 	var rec interface{}
+
+	var retryCtx *Context
+	if c, ok := ctx.(*Context); ok {
+		retryCtx = c
+	} else {
+		retryCtx = &Context{
+			Context: ctx,
+		}
+	}
 
 	if r.withPanic {
 		ff := f
@@ -161,6 +206,11 @@ func (r *Executor) Execute(f func() error) error {
 	}
 
 	for i := 0; i <= r.retries; i++ {
+		// Return on cancelations and timeouts
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		// Run method
 		if err = f(); err == nil && rec == nil {
 			return nil
@@ -181,12 +231,12 @@ func (r *Executor) Execute(f func() error) error {
 
 		// Backoff.Wait
 		if i != r.retries && r.backoff != nil {
-			r.Context.RetryCount = i + 1
-			r.Context.LastDelay = r.backoff.GetDelay(r.Context)
-			if r.Context.LastDelay < 0 {
-				r.Context.LastDelay = 0
+			retryCtx.RetryCount = i + 1
+			retryCtx.LastDelay = r.backoff.GetDelay(*retryCtx)
+			if retryCtx.LastDelay < 0 {
+				retryCtx.LastDelay = 0
 			}
-			r.Wait(r.Context.LastDelay)
+			r.Wait(retryCtx.LastDelay)
 		}
 	}
 	return ErrMaxRetries

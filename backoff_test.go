@@ -114,12 +114,13 @@ func TestExponentialDelayBackoffBackoff(t *testing.T) {
 		}
 	}
 
+	ctx := NewContext()
 	e := NewExecutor().WithRetries(5).WithBackoff(ExponentialDelayBackoff(10*time.Millisecond, 2))
-	if err := e.Execute(failTimes(5)); err != nil {
+	if err := e.ExecuteContext(ctx, failTimes(5)); err != nil {
 		t.Error("error found and not expected")
 	}
-	if e.Context.RetryCount != 5 {
-		t.Error("invalid value for RetryCount", e.Context.RetryCount)
+	if ctx.RetryCount != 5 {
+		t.Error("invalid value for RetryCount", ctx.RetryCount)
 	}
 }
 
